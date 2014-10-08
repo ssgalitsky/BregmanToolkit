@@ -105,7 +105,7 @@ class Features(object):
                 'nfft': 16384,
                 'wfft': 8192,
                 'nhop': 4410,
-                'window' : 'hamm',
+                'window' : 'analysis',
                 'log10': False,
                 'magnitude': True,
                 'power_ext': ".power",
@@ -125,7 +125,7 @@ class Features(object):
             'nfft': 16384,
             'wfft': 8192,
             'nhop': 4410,
-            'window' : 'hamm',
+            'window' : 'analysis',
             'log10': False,
             'magnitude': True,
             'power_ext': ".power",
@@ -406,13 +406,17 @@ class Features(object):
         fp = self._check_feature_params()
         num_frames = len(self.x)
         self.STFT = P.zeros((self.nfft/2+1, num_frames), dtype='complex')
-        # win = P.ones(self.wfft) if self.window=='rect' else P.hanning(self.wfft)
+        if self.window == 'analysis':
+            win  = sig.hamming(self.wfft, False)
+        else:
+            win = P.ones(self.wfft)
+            print("rectangular analysis window being used")
         x = P.zeros(self.wfft)
         buf_frames = 0
         for k, nex in enumerate(self.x):
             self._shift_insert(x, nex, self.nhop)
             if self.nhop >= self.wfft - k*self.nhop : # align buffer on start of audio
-                self.STFT[:,k-buf_frames]=P.rfft(x, self.nfft).T # win*x
+                self.STFT[:,k-buf_frames]=P.rfft(win*x, self.nfft).T
             else:
                 buf_frames+=1
         self.STFT = self.STFT / self.nfft
@@ -495,21 +499,30 @@ class Features(object):
         Xh *= P.exp( 1j * phs)
         self.X_hat = Xh
 
-    def _overlap_add(self, X, usewin=True, resamp=None):
+    def _overlap_add(self, X, resamp=None):
+        fp = self._check_feature_params()
+        if self.window == 'synthesis':
+            win = P.hanning(self.nfft) 
+            win *= 1.0 / ((float(self.nfft)*(self.win**2).sum())/self.nhop)
+        else:
+            win = P.ones(self.nfft)
+        if resamp:
+            win = sig.resample(win, int(P.np.round(self.nfft * resamp)))
         nfft = self.nfft
         nhop = self.nhop
         if resamp is None:
             x = P.zeros((X.shape[0] - 1)*nhop + nfft)
             for k in range(X.shape[0]):
-                x[ k * nhop : k * nhop + nfft ] += X[k] * self.win
+                x[ k * nhop : k * nhop + nfft ] += X[k] * win
         else:
             rfft = int(P.np.round(nfft * resamp))
             x = P.zeros((X.shape[0] - 1)*nhop + rfft)
             for k in range(X.shape[0]):                
-                x[ k * nhop : k * nhop + rfft ] += sig.resample(X[k],rfft) * self.win
+                x[ k * nhop : k * nhop + rfft ] += (sig.resample(X[k],rfft) * 
+                                                    win)
         return x
     
-    def _istftm(self, X_hat=None, Phi_hat=None, pvoc=False, usewin=True, resamp=None):
+    def _istftm(self, X_hat=None, Phi_hat=None, pvoc=False, resamp=None):
         """
         :: 
             Inverse short-time Fourier transform magnitude. Make a signal from a |STFT| transform.
@@ -532,15 +545,13 @@ class Features(object):
         else:
             Phi_hat = P.angle(self.STFT) if Phi_hat is None else Phi_hat
             self.X_hat = X_hat *  P.exp( 1j * Phi_hat )
-        if usewin:
-            self.win = P.hanning(self.nfft) 
-            self.win *= 1.0 / ((float(self.nfft)*(self.win**2).sum())/self.nhop)
-        else:
-            self.win = P.ones(self.nfft)
-        if resamp:
-            self.win = sig.resample(self.win, int(P.np.round(self.nfft * resamp)))
         fp = self._check_feature_params()
-        self.x_hat = self._overlap_add(P.real(self.nfft * P.irfft(self.X_hat.T)), usewin=usewin, resamp=resamp)
+        self.x_hat = self._overlap_add(P.real(self.nfft * 
+                                              P.irfft(self.X_hat.T)), 
+                                       resamp=resamp)
+        if self.window == 'analysis':
+            self.x_hat = (self.nhop * self.x_hat / 
+                          sum(sig.hamming(self.wfft, False)))
         if self.verbosity:
             print "Extracted iSTFTM->self.x_hat"        
         return self.x_hat
