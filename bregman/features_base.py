@@ -503,7 +503,7 @@ class Features(object):
         fp = self._check_feature_params()
         if self.window == 'synthesis':
             win = P.hanning(self.nfft) 
-            win *= 1.0 / ((float(self.nfft)*(self.win**2).sum())/self.nhop)
+            win *= 1.0 / ((float(self.nfft)*(win**2).sum())/self.nhop)
         else:
             win = P.ones(self.nfft)
         if resamp:
