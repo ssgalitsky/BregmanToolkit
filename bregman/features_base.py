@@ -105,7 +105,7 @@ class Features(object):
                 'nfft': 16384,
                 'wfft': 8192,
                 'nhop': 4410,
-                'window' : 'analysis',
+                'hann_win' : 'analysis',
                 'log10': False,
                 'magnitude': True,
                 'power_ext': ".power",
@@ -125,7 +125,7 @@ class Features(object):
             'nfft': 16384,
             'wfft': 8192,
             'nhop': 4410,
-            'window' : 'analysis',
+            'hann_win' : 'analysis',
             'log10': False,
             'magnitude': True,
             'power_ext': ".power",
@@ -406,8 +406,12 @@ class Features(object):
         fp = self._check_feature_params()
         num_frames = len(self.x)
         self.STFT = P.zeros((self.nfft/2+1, num_frames), dtype='complex')
-        if self.window == 'analysis':
-            win  = sig.hamming(self.wfft, False)
+        if self.hann_win == 'analysis':
+            win  = sig.hanning(self.wfft, False)
+            print("hanning analysis window being used")
+        elif self.hann_win == 'both':
+            win  = sig.hanning(self.wfft, False) ** 0.5
+            print("hanning analysis window being used")        
         else:
             win = P.ones(self.wfft)
             print("rectangular analysis window being used")
@@ -499,15 +503,8 @@ class Features(object):
         Xh *= P.exp( 1j * phs)
         self.X_hat = Xh
 
-    def _overlap_add(self, X, resamp=None):
+    def _overlap_add(self, X, win, resamp=None):
         fp = self._check_feature_params()
-        if self.window == 'synthesis':
-            win = P.hanning(self.nfft) 
-            win *= 1.0 / ((float(self.nfft)*(win**2).sum())/self.nhop)
-        else:
-            win = P.ones(self.nfft)
-        if resamp:
-            win = sig.resample(win, int(P.np.round(self.nfft * resamp)))
         nfft = self.nfft
         nhop = self.nhop
         if resamp is None:
@@ -546,12 +543,33 @@ class Features(object):
             Phi_hat = P.angle(self.STFT) if Phi_hat is None else Phi_hat
             self.X_hat = X_hat *  P.exp( 1j * Phi_hat )
         fp = self._check_feature_params()
+
+        if self.hann_win == 'synthesis':
+            pad = P.maximum(self.nfft - self.wfft, 0)
+            win = P.r_[sig.hanning(self.wfft, False), P.zeros(pad)]
+            print("hanning synthesis window being used")
+        elif self.hann_win == 'both':
+            pad = P.maximum(self.nfft - self.wfft, 0)
+            win = P.r_[sig.hanning(self.wfft, False) ** 0.5, P.zeros(pad)]
+            print("hanning synthesis window being used")
+        else:
+            win = P.ones(self.nfft)
+            print("rectangular synthesis window being used")
+        if resamp:
+            win = sig.resample(win, int(P.np.round(self.nfft * resamp)))
+
         self.x_hat = self._overlap_add(P.real(self.nfft * 
-                                              P.irfft(self.X_hat.T)), 
+                                              P.irfft(self.X_hat.T)),
+                                       win=win, 
                                        resamp=resamp)
-        if self.window == 'analysis':
-            self.x_hat = (self.nhop * self.x_hat / 
-                          sum(sig.hamming(self.wfft, False)))
+        # This scaling needs to be fixed for rectangular windows:
+        if self.hann_win in ['analysis', 'synthesis', 'both']:
+        	sc = 2 * float(self.nhop) / self.wfft 
+        else:
+        	sc = 1. / P.ceil(float(self.wfft) / self.nhop)
+        print("Scaling by {0}".format(sc))
+        self.x_hat *= sc
+
         if self.verbosity:
             print "Extracted iSTFTM->self.x_hat"        
         return self.x_hat
